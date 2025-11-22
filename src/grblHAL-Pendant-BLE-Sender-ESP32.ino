@@ -77,8 +77,8 @@ String rxMsgString = "";
 unsigned long lastTime = 0;
 unsigned long timerDelay = 10; // was 100
 
-#define SERIAL_DEBUG
-#define SOFT_SERIAL_DEBUG
+// #define SERIAL_DEBUG
+#define SOFT_SERIAL_DEBUG  // SEND TO grblHAL
 
 class MyServerCallbacks: public BLEServerCallbacks {
         void onConnect(BLEServer* pServer) {
@@ -151,7 +151,7 @@ void setup() {
 
 
         // Start Serials
-        delay(500);
+        delay(2000);
         #ifdef SERIAL_DEBUG
                 Serial.begin(115200);
         #endif
@@ -252,6 +252,9 @@ void readAndSendSerial() {
         while (Serial2.available()) {
 
                 in_buffer_char = Serial2.read();
+                #ifdef SERIAL_DEBUG
+                        Serial.print(in_buffer_char);
+                #endif
 
                 if (in_buffer_char == '{') {
                         i = 0;
