@@ -1,31 +1,20 @@
 
-/* WORKING UPLOAD SETUP
-   USB     ESP-01
+/* 
+   TEENSY       ESP32
    -----------------
-   DTR     --
-   RX      TX
-   TX      RX
-   VCC     VCC + CH_PD
-   CTS     --
-   GND     GND + GPIO-0
+   RX           TX
+   TX           RX
+   VCC  not to  VCC     (both are powered seperately by 5V PSU)
+   GND          GND
  */
+
 
 // BLE ADDRESS     "0c:b8:15:c3:b1:ea"
 
-
-// DISABLE BROWNOUT DETECTION
-#include <soc/soc.h>
-#include <soc/rtc.h>
-
-// #include <WiFi.h> // to disable WiFi
-// #include "driver/adc.h" // to disable ADC
-
-// SOFTWARE SERIAL
-// #include <SoftwareSerial.h>
-// #define SOFTSERIAL_SPEED 38400  // 38400 (?) // 4800 (ok)
-// #define SOFTSERIAL_TX 18
-// #define SOFTSERIAL_RX 19
-// SoftwareSerial SoftSerial;
+// #include <soc/soc.h>
+// #include <soc/rtc.h>
+#include <WiFi.h> // to disable WiFi
+// #include "driver/adc.h" // to disable ADC    // deprecated
 
 // SECOND SERIAL (to Teensy/GRBLHAL)
 #define SER2_TX 17
@@ -50,7 +39,6 @@ static BLEUUID CHARACTERISTIC_UUID_TX_WY("47d8deb4-e094-481c-8cf5-a6ad5b20517c")
 static BLEUUID CHARACTERISTIC_UUID_TX_WZ("210ea555-b93c-4d3b-8615-fd47a90b4526");
 static BLEUUID CHARACTERISTIC_UUID_TX_WA("c3bf023c-45a9-49be-8f66-45600b31287a");
 
-
 BLEServer *pServer = NULL;
 #define bleServerName "GRBLHAL"
 
@@ -68,17 +56,16 @@ float wy;
 float wz;
 float wa;
 String state = "";
-
 String rxCmdString = "";
 String rxGCodeString = "";
 String rxMsgString = "";
 
 // Timer variables
 unsigned long lastTime = 0;
-unsigned long timerDelay = 10; // was 100
+unsigned long timerDelay = 20;  // was 100
 
-// #define SERIAL_DEBUG
-#define SOFT_SERIAL_DEBUG  // SEND TO grblHAL
+// #define SERIAL_DEBUG         // Debug via USB
+#define SOFT_SERIAL_DEBUG       // SEND TO grblHAL
 
 class MyServerCallbacks: public BLEServerCallbacks {
         void onConnect(BLEServer* pServer) {
@@ -144,20 +131,20 @@ DynamicJsonDocument JsonIn(128);
 void setup() {
 
         // DISABLE BROWNOUT DETECTOR
-        WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
+        // WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
         // adc_power_off();
-        // WiFi.disconnect(true);  // Disconnect from the network
-        // WiFi.mode(WIFI_OFF);    // Switch WiFi off
+        WiFi.disconnect(true);  // Disconnect from the network
+        WiFi.mode(WIFI_OFF);    // Switch WiFi off
 
 
         // Start Serials
         delay(2000);
         #ifdef SERIAL_DEBUG
                 Serial.begin(115200);
+                Serial.println("[BLE] starting Serial Debug");
         #endif
+
         Serial2.begin(SER2_BAUDRATE, SERIAL_8N1, SER2_RX, SER2_TX);
-        // SoftSerial.begin(SOFTSERIAL_SPEED, SWSERIAL_8N1, SOFTSERIAL_RX, SOFTSERIAL_TX, false);
-        
         SerialMessage("[BLE] starting BLE");
 
         // Create the BLE Device
@@ -212,7 +199,6 @@ void loop() {
         if ((millis() - lastTime) > timerDelay) {
 
                 if (BLEConnected) {
-                        // SUCCESS !!!
                         readAndSendSerial();
                 }
 
@@ -334,8 +320,6 @@ void readAndSendSerial() {
                         }
                 }
         }
-
-        // Serial2.println("{\"OK\"}");
 
         //                         
         
