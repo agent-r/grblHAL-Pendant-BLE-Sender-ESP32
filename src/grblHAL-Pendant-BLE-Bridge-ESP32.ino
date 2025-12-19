@@ -14,7 +14,7 @@
 #define SER2_RX        16
 #define SER2_BAUDRATE  115200
 
-#define DEBUG_SERIAL   true
+#define DEBUG_SERIAL   0
 
 static BLEUUID SERVICE_UUID("825aeb6e-7e1d-4973-9c75-30c042c4770c");
 static BLEUUID CHARACTERISTIC_UUID_RX("24259347-9d86-4c67-a9ae-84f6a7f0c90d"); // BLE → Serial
