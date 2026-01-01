@@ -85,6 +85,8 @@ void setup() {
 
     // BLE init
     BLEDevice::init("GRBLHAL");
+    BLEDevice::setMTU(247);
+    
     pServer = BLEDevice::createServer();
     pServer->setCallbacks(new MyServerCallbacks());
 
