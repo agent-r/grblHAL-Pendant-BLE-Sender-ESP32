@@ -8,6 +8,8 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 
+#include <esp_gatt_common_api.h>
+
 // ==================== CONFIG ====================
 
 #define SER2_TX        17
@@ -15,6 +17,8 @@
 #define SER2_BAUDRATE  115200
 
 #define DEBUG_SERIAL   0
+#define BLE_MTU_SIZE   247
+#define BLE_READY_DELAY_MS 300
 
 static BLEUUID SERVICE_UUID("825aeb6e-7e1d-4973-9c75-30c042c4770c");
 static BLEUUID CHARACTERISTIC_UUID_RX("24259347-9d86-4c67-a9ae-84f6a7f0c90d"); // BLE → Serial
@@ -22,43 +26,54 @@ static BLEUUID CHARACTERISTIC_UUID_TX("b52e05ac-8a8a-4880-85c7-bd3e6a32dc0e"); /
 
 // ==================== GLOBALS ====================
 
-BLEServer        *pServer          = nullptr;
-BLECharacteristic *pTxCharacteristic = nullptr;
+BLEServer*         pServer           = nullptr;
+BLECharacteristic* pTxCharacteristic = nullptr;
 
-bool BLEConnected     = false;
-bool oldBLEConnected  = false;
-
-// FreeRTOS queue for BLE RX bytes
 QueueHandle_t bleRxQueue;
 
-// Serial JSON buffer
-String serialJson;
+bool     bleConnected     = false;
+bool     oldBleConnected  = false;
+uint32_t bleConnectTime  = 0;
 
 // ==================== DEBUG ====================
 
-void debug(const String &msg) {
+void debug(const String& msg) {
     if (DEBUG_SERIAL) {
-        Serial.println("[BLE Bridge] " + msg);
+        Serial.println("[BLE BRIDGE] " + msg);
     }
 }
 
 // ==================== BLE CALLBACKS ====================
 
-class MyServerCallbacks : public BLEServerCallbacks {
-    void onConnect(BLEServer* pServer) override {
-        BLEConnected = true;
+class ServerCallbacks : public BLEServerCallbacks {
+
+    void onConnect(BLEServer* server) override {
+        bleConnected    = true;
+        bleConnectTime  = millis();
+
+        // MTU erneut erzwingen (sehr wichtig bei Reconnects)
+        esp_ble_gatt_set_local_mtu(BLE_MTU_SIZE);
+
+        // TX-Characteristic resetten (CCCD-State!)
+        if (pTxCharacteristic) {
+            pTxCharacteristic->setValue("");
+        }
+
+        debug("client connected");
     }
 
-    void onDisconnect(BLEServer* pServer) override {
-        BLEConnected = false;
+    void onDisconnect(BLEServer* server) override {
+        bleConnected = false;
+        debug("client disconnected");
     }
 };
 
 class RxCallbacks : public BLECharacteristicCallbacks {
-    void onWrite(BLECharacteristic *pCharacteristic) override {
-        std::string value = pCharacteristic->getValue();
+
+    void onWrite(BLECharacteristic* characteristic) override {
+        std::string value = characteristic->getValue();
         for (char c : value) {
-            xQueueSend(bleRxQueue, &c, 0);   // thread-safe
+            xQueueSend(bleRxQueue, &c, 0);
         }
     }
 };
@@ -73,45 +88,39 @@ void setup() {
     }
 
     Serial2.begin(SER2_BAUDRATE, SERIAL_8N1, SER2_RX, SER2_TX);
+    Serial2.println("{\"msg\":\"[BLE BRIDGE] starting\"}");
 
-    debug("starting");
-    Serial2.println("{\"msg\":\"[BLE Bridge] starting\"}");
-
-    // Create BLE RX queue
+    // Queue für BLE → Serial
     bleRxQueue = xQueueCreate(256, sizeof(char));
-    if (!bleRxQueue) {
-        debug("BLE RX queue allocation failed!");
-    }
 
-    // BLE init
+    // BLE Init
     BLEDevice::init("GRBLHAL");
-    BLEDevice::setMTU(247);
-    
+    BLEDevice::setMTU(BLE_MTU_SIZE);
+
     pServer = BLEDevice::createServer();
-    pServer->setCallbacks(new MyServerCallbacks());
+    pServer->setCallbacks(new ServerCallbacks());
 
-    BLEService *pService = pServer->createService(SERVICE_UUID, 30);
+    BLEService* service = pServer->createService(SERVICE_UUID, 30);
 
-    // RX characteristic (BLE → Serial)
-    BLECharacteristic *pRxCharacteristic = pService->createCharacteristic(
+    // RX (BLE → Serial)
+    BLECharacteristic* rxChar = service->createCharacteristic(
         CHARACTERISTIC_UUID_RX,
         BLECharacteristic::PROPERTY_WRITE
     );
-    pRxCharacteristic->addDescriptor(new BLE2902());
-    pRxCharacteristic->setCallbacks(new RxCallbacks());
+    rxChar->addDescriptor(new BLE2902());
+    rxChar->setCallbacks(new RxCallbacks());
 
-    // TX characteristic (Serial → BLE)
-    pTxCharacteristic = pService->createCharacteristic(
+    // TX (Serial → BLE)
+    pTxCharacteristic = service->createCharacteristic(
         CHARACTERISTIC_UUID_TX,
         BLECharacteristic::PROPERTY_NOTIFY
     );
     pTxCharacteristic->addDescriptor(new BLE2902());
 
-    pService->start();
-    pServer->getAdvertising()->start();
+    service->start();
 
-    debug("advertising");
-    Serial2.println("{\"msg\":\"[BLE Bridge] advertising\"}");
+    pServer->getAdvertising()->start();
+    Serial2.println("{\"msg\":\"[BLE BRIDGE] advertising\"}");
 }
 
 // ==================== LOOP ====================
@@ -121,20 +130,14 @@ void loop() {
     processSerialToBle();
     processBleToSerial();
 
-    // Connection state handling
-    if (!BLEConnected && oldBLEConnected) {
+    // Re-Advertising nach Disconnect
+    if (!bleConnected && oldBleConnected) {
         delay(300);
         pServer->startAdvertising();
-        oldBLEConnected = BLEConnected;
-        debug("client disconnected");
-        debug("advertising");
-        Serial2.println("{\"msg\":\"[BLE Bridge] advertising\"}");
+        Serial2.println("{\"msg\":\"[BLE BRIDGE] advertising\"}");
     }
 
-    if (BLEConnected && !oldBLEConnected) {
-        oldBLEConnected = BLEConnected;
-        debug("client connected");
-    }
+    oldBleConnected = bleConnected;
 }
 
 // ==================== SERIAL → BLE ====================
@@ -142,6 +145,11 @@ void loop() {
 void processSerialToBle() {
 
     static String serialBuffer;
+
+    // Sendesperre nach Connect (MTU-Aushandlung!)
+    bool bleReady =
+        bleConnected &&
+        (millis() - bleConnectTime > BLE_READY_DELAY_MS);
 
     while (Serial2.available()) {
         char c = Serial2.read();
@@ -151,10 +159,12 @@ void processSerialToBle() {
         }
         else if (c == '}') {
             serialBuffer += '}';
-            if (BLEConnected && pTxCharacteristic) {
+
+            if (bleReady && pTxCharacteristic) {
                 pTxCharacteristic->setValue(serialBuffer.c_str());
                 pTxCharacteristic->notify();
             }
+
             debug(serialBuffer);
             serialBuffer = "";
         }
